@@ -21,10 +21,6 @@ def get_klines (symbol):
     global logger
     # logger =  logging.getLogger('datacollector')
     try:
-        if "USDT" not in symbol:
-            logger.warning("{} is not a USDT pair. Ignoring".format(symbol))
-            return
-
         out  = "{:<13} ".format("Open-time")
         out += "{:>13} ".format("Open")
         out += "{:>13} ".format("High")
@@ -92,31 +88,30 @@ def get_klines (symbol):
         logger.error("Exception while getting /storing klines of {:<8} ".format(symbol))
         logger.error(str(e))
 
-def intialize_db(symbols_toInit):
-    global pool
-    global logger
+def get_supported_symbols():
+    supported_symbols = []
     try:
         client = Client(api_key, api_secret, tld="com")
     except Exception as e:
         logger.error("Exception while creating client. Exiting due to below exception")
         logger.error(str(e))
-        return
+        return supported_symbols
 
-    logger.info("Reading symbols")
+    logger.info("Getting supported symbols from Binance Client")
     symbols = client.get_symbol_ticker()
 
-    tickers = []
     for d in symbols:
         sym = d['symbol']
-        if "USDT" in sym:
-            tickers.append(sym)
-        # if len(tickers) > 10:
-        #     break
+        supported_symbols.append(sym)
+    return supported_symbols
+
+def intialize_db(symbols_toInit):
+    global pool
+    global logger
 
     logger.info("Starting to get klines for {} symbols".format(len(tickers)))
-    for sym in tickers:
-        if sym in symbols_toInit:
-            get_klines(sym)
+    for sym in symbols_toInit:
+        get_klines(sym)
     # pool = multiprocessing.Pool(processes = 3)
     # pool.map(get_klines, tickers)
 
@@ -156,7 +151,7 @@ def get_next_value(symbol):
             return val
     return None
 
-def trail(symbol, up_percent = 5, down_percent = 5):
+def trail(symbol, up_percent = 5, down_percent = 5, create_plot = True):
     global logger
     prev_val = get_next_value(symbol)
     if prev_val is None:
@@ -175,6 +170,8 @@ def trail(symbol, up_percent = 5, down_percent = 5):
     trail_ups_list = []
     trail_downs_list = []
     base_vals = [] # trend for 100$ invested at the beginning
+    buy_vals_list = []
+    sell_vals_list = []
 
     realized_value = 100
     potential_value = 0
@@ -207,8 +204,10 @@ def trail(symbol, up_percent = 5, down_percent = 5):
                 # Upward movement is started. Buy
                 buy_price = cur_price
                 buy_qty = realized_value / buy_price
-                logger.warning("BUY  : trail: {}, price: {}, qty: {}, total value: {}".format(
+                logger.info("BUY  : trail: {}, price: {}, qty: {}, total value: {}".format(
                                    trail_val, buy_price, buy_qty, realized_value))
+                if create_plot:
+                    buy_vals_list.append((len(cur_prices_list), buy_price))
                 sell_price = sell_qty = 0
                 # trade_buy(symbol, buy_qty, buy_price)
                 trail_gap = cur_price * up_percent / 100
@@ -227,6 +226,8 @@ def trail(symbol, up_percent = 5, down_percent = 5):
                 sell_price = cur_price
                 sell_qty = buy_qty
                 buy_qty = buy_price = 0
+                if create_plot:
+                    sell_vals_list.append((len(cur_prices_list), sell_price))
                 realized_value = sell_qty * sell_price
                 potential_value = realized_value
                 logger.warning("SELL : trail: {}, price: {}, qty: {}, total value: {}".format(
@@ -239,73 +240,104 @@ def trail(symbol, up_percent = 5, down_percent = 5):
                 # if txn > 10:
                 #     break
         prev_val = cur_price
-        cur_prices_list.append(cur_price)
-        net_vals.append(realized_value + potential_value)
-        potential_values_list.append(potential_value)
-        # trail_vals.append(trail_val)
-        realized_vals_list.append(realized_value)
-        base_vals.append(cur_price * initial_base_qty)
+        if create_plot:
+            cur_prices_list.append(cur_price)
+            net_vals.append(realized_value + potential_value)
+            potential_values_list.append(potential_value)
+            # trail_vals.append(trail_val)
+            realized_vals_list.append(realized_value)
+            base_vals.append(cur_price * initial_base_qty)
         # print(cur_price, trail_val, potential_value, realized_value)
         cur_price = get_next_value(symbol)
 
     logger.error("Up = {}, down = {}, asset value at end = {}, +P/-L = {}".format(up_percent, down_percent, realized_value, realized_value - 100))
-    logger.info("Creating charts")
-    fig, axs = plt.subplots(2, 1)
-    axs[0].plot(range(len(trail_ups_list)), trail_ups_list, 
-                range(len(trail_downs_list)), trail_downs_list,
-                range(len(cur_prices_list)), cur_prices_list)
+    if create_plot:
+        logger.info("Creating charts")
+        fig, axs = plt.subplots(2, 1)
+        axs[0].plot(range(len(trail_ups_list)), trail_ups_list, 
+                    range(len(trail_downs_list)), trail_downs_list,
+                    range(len(cur_prices_list)), cur_prices_list, linewidth = 1.0)
 
-    low = min(cur_prices_list)
-    high = max(cur_prices_list)
-    gap = high - low
-    low += gap * 0.1
-    high += gap * 0.1
+        # buy_x = []
+        # buy_y = []
+        # for x, y in buy_vals_list:
+        #     buy_x.append(x)
+        #     buy_y.append(y)
+        # axs[0].scatter(buy_x, buy_y, c='g')
 
-    axs[0].set_xlabel('time')
-    axs[0].set_ylabel('current and trailing values')
-    axs[0].grid(True)
-    axs[0].legend(["Trail_up", "Trail_down","Current"], loc="upper right")
+        # for i, y in enumerate(buy_y):
+        #     axs[0].annotate(y, (buy_x[i], buy_y[i]), c='g')
 
-    # major_ticks_top=np.linspace(low, high, 10)
-    # minor_ticks_top=np.linspace(low, high, 20)
-    # major_ticks_bottom=np.linspace(0,15,6)
+        low = min(cur_prices_list)
+        high = max(cur_prices_list)
+        gap = high - low
+        low += gap * 0.1
+        high += gap * 0.1
 
-    # axs[0].set_xticks(major_ticks_top)
-    # axs[0].set_yticks(major_ticks_top)
-    # axs[0].set_xticks(minor_ticks_top,minor=True)
-    # axs[0].set_yticks(minor_ticks_top,minor=True)
-    # axs[0].grid(which="major",alpha=0.6)
-    # axs[0].grid(which="minor",alpha=0.3)
-    t1 = range(len(potential_values_list))
-    t2 = range(len(realized_vals_list))
-    # potential_values_list = t1
-    # realized_vals_list = [4, 5, 6]
-    axs[1].plot(t1, potential_values_list, t2, realized_vals_list, t2, base_vals)
-    # axs[1].set_xlim(0, plotlen)
-    axs[1].legend(["Potential", "realized_vals_list", "base"], loc="upper right")
-    axs[1].grid(True)
-    fig.tight_layout()
-    fig.set_figwidth(12)
-    plt.figure
-    plt.savefig("{}_{}-up_{}-down.png".format(symbol, up_percent, down_percent))
-    plt.close()
+        axs[0].set_title("{} {}% Up and {}% Down".format(symbol, up_percent, down_percent))
+        axs[0].grid(True)
+        axs[0].legend(["Trail_up", "Trail_down", "Price"], loc="upper left")
+
+        # major_ticks_top=np.linspace(low, high, 10)
+        # minor_ticks_top=np.linspace(low, high, 20)
+        # major_ticks_bottom=np.linspace(0,15,6)
+
+        # axs[0].set_xticks(major_ticks_top)
+        # axs[0].set_yticks(major_ticks_top)
+        # axs[0].set_xticks(minor_ticks_top,minor=True)
+        # axs[0].set_yticks(minor_ticks_top,minor=True)
+        # axs[0].grid(which="major",alpha=0.6)
+        # axs[0].grid(which="minor",alpha=0.3)
+        t1 = range(len(potential_values_list))
+        t2 = range(len(realized_vals_list))
+        # potential_values_list = t1
+        # realized_vals_list = [4, 5, 6]
+        axs[1].plot(t1, potential_values_list, c='b', label = "Potential", linewidth = 1.0)
+        axs[1].plot(t2, realized_vals_list, c='r', label = "realized PL", linewidth = 1.0)
+        axs[1].plot(t2, base_vals, c='k', linewidth = 1.0)
+        # axs[1].set_xlim(0, plotlen)
+        axs[1].legend(["Potential", "realized", "base"], loc="upper left")
+        axs[1].grid(True)
+        fig.tight_layout()
+        fig.set_figwidth(12)
+        plt.figure
+        plt_fname = "{}_{}-up_{}-down.png".format(symbol, up_percent, down_percent)
+        plt.savefig(plt_fname, dpi=300)
+        plt.close()
+ 
+    return realized_value
 
 signal.signal(signal.SIGTERM, term)
 signal.signal(signal.SIGINT,  term)
 
 if __name__=='__main__':
     logger =  logging.getLogger('datacollector')
-    logger.setLevel(logging.WARN)
+    logger.setLevel(logging.INFO)
     ch = logging.StreamHandler()
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     ch.setFormatter(formatter)
     logger.addHandler(ch)
-    multiprocessing.set_start_method('spawn')
+    # multiprocessing.set_start_method('spawn')
 
-    # symbols = ["all"]
-    symbols = ["BTCUSDT", "ETHUSDT", "WINUSDT"]
-    intialize_db(symbols)
-    for up in range(1, 2):
-        for down in range(1, 2):
-            read_symbol_data("BTCUSDT")
-            trail("BTCUSDT", up_percent=up, down_percent=down)
+    supported_symbols = get_supported_symbols()
+    # interested_cryptos = ["USDT"] # for all USDT pairs
+    interested_cryptos = ["WINUSDT", "UFTETH"] # for individual pairs
+
+    tickers = []
+    for ticker in supported_symbols:
+        for crypto in interested_cryptos:
+            if crypto in ticker:
+                tickers.append(ticker)
+                continue
+
+    intialize_db(tickers)
+    updown_vals = [(1,1), (2,2), (5,5), (10,4)]
+    for sym in tickers:
+        # max_realized_with=()
+        # max_realized = 0
+        for up, down in updown_vals:
+            read_symbol_data(sym)
+            realized = trail(sym, up_percent=up, down_percent=down)
+            # if realized > max_realized:
+            #     max_realized = realized
+            #     max_realized_with = (up, down)
