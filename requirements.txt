@@ -1,5 +1,5 @@
 python-binance
-#TA-Lib
 numpy
 matplotlib
+refer https://blog.quantinsti.com/install-ta-lib-python/#windows for #TA-Lib
 
